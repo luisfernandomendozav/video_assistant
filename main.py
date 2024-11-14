@@ -28,33 +28,37 @@ class ListenThread(QThread):
         self.microphone = sr.Microphone()
         self.is_listening = False
         self.should_stop = False
-
-    def run(self):
-        # Initialize microphone once
-        with self.microphone as source:
-            print("Adjusting for ambient noise...")
-            self.recognizer.adjust_for_ambient_noise(source, duration=1)
         
+        # Do ambient noise adjustment once during initialization
+        with self.microphone as source:
+            self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
+        
+        # Set recognition parameters for faster response
+        self.recognizer.energy_threshold = 300  # Lower threshold for faster detection
+        self.recognizer.dynamic_energy_threshold = False  # Disable dynamic adjustment
+        self.recognizer.pause_threshold = 0.5  # Shorter pause threshold
+        
+    def run(self):
         while not self.should_stop:
             if self.is_listening:
                 try:
                     with self.microphone as source:
-                        print("Listening for command...")
-                        audio = self.recognizer.listen(source, phrase_time_limit=5)
+                        audio = self.recognizer.listen(source, 
+                                                     phrase_time_limit=3,  # Reduced from 5
+                                                     timeout=None)
                     
-                    if not self.is_listening:  # Check if we should still process the audio
+                    if not self.is_listening:
                         continue
                         
                     command = self.recognizer.recognize_google(audio).lower()
-                    print(f"Command received: {command}")
                     self.command_received.emit(command)
                     
                 except Exception as e:
                     print(f"Error occurred: {e}")
                 
-                self.is_listening = False  # Stop listening after processing one command
+                self.is_listening = False
             else:
-                self.msleep(100)  # Small delay when not listening
+                self.msleep(50)  # Reduced sleep time from 100ms to 50ms
 
     def start_listening(self):
         self.is_listening = True
@@ -85,7 +89,26 @@ class VideoPlayer(QWidget):
         self.listen_thread.command_received.connect(self.handle_command)
         self.listen_thread.start()
         
+        # Initialize UI first
         self.init_ui()
+        
+        # Now we can set up command mapping after mediaPlayer is initialized
+        self.command_map = {
+            'take screenshot': self.take_screenshot,
+            'make note': self.make_note,
+            'pause': self.mediaPlayer.pause,
+            'pause video': self.mediaPlayer.pause,
+            'play': self.mediaPlayer.play,
+            'play video': self.mediaPlayer.play,
+            'skip forward': lambda: self.mediaPlayer.setPosition(self.mediaPlayer.position() + 10000),
+            'skip backward': lambda: self.mediaPlayer.setPosition(self.mediaPlayer.position() - 10000),
+            'go back': lambda: self.mediaPlayer.setPosition(self.mediaPlayer.position() - 10000),
+            'volume up': lambda: self.volumeSlider.setValue(min(self.volumeSlider.value() + 10, 100)),
+            'volume down': lambda: self.volumeSlider.setValue(max(self.volumeSlider.value() - 10, 0)),
+            'mute': lambda: self.mediaPlayer.setMuted(not self.mediaPlayer.isMuted()),
+            'close video': self.close_video,
+            'stop video': self.close_video
+        }
 
     @pyqtSlot(str, str)
     def show_message_box(self, title, message):
@@ -164,32 +187,10 @@ class VideoPlayer(QWidget):
             self.listen_thread.stop_listening()
 
     def handle_command(self, command):
-        if 'take screenshot' in command:
-            self.take_screenshot()
-        elif 'make note' in command:
-            self.make_note()
-        elif 'pause video' in command or 'pause' in command:
-            self.mediaPlayer.pause()
-        elif 'play video' in command or 'play' in command:
-            self.mediaPlayer.play()
-        elif 'skip forward' in command:
-            current_position = self.mediaPlayer.position()
-            self.mediaPlayer.setPosition(current_position + 10000)
-        elif 'skip backward' in command or 'go back' in command:
-            current_position = self.mediaPlayer.position()
-            self.mediaPlayer.setPosition(current_position - 10000)
-        elif 'volume up' in command or 'increase volume' in command:
-            current_volume = self.volumeSlider.value()
-            new_volume = min(current_volume + 10, 100)
-            self.volumeSlider.setValue(new_volume)
-        elif 'volume down' in command or 'decrease volume' in command:
-            current_volume = self.volumeSlider.value()
-            new_volume = max(current_volume - 10, 0)
-            self.volumeSlider.setValue(new_volume)
-        elif 'mute' in command:
-            self.mediaPlayer.setMuted(not self.mediaPlayer.isMuted())
-        elif 'close video' in command or 'stop video' in command:
-            self.close_video()
+        for cmd, action in self.command_map.items():
+            if cmd in command:
+                action()
+                break
 
     def open_file(self):
         filename, _ = QFileDialog.getOpenFileName(self, "Open Video")
